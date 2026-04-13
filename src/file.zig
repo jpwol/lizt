@@ -24,6 +24,8 @@ const STICKY = 0o1000;
 
 pub const FileStats = struct {
     name: []const u8,
+    username: []const u8,
+    groupname: []const u8,
     link: ?[]const u8,
     kind: File.Kind,
     mode: u16,
@@ -64,12 +66,9 @@ pub fn printlist(self: Self, stdout: *Io.Writer) !void {
         var max_group_width: usize = 0;
         var max_pwidth: usize = 0;
         for (list.items) |i| {
-            const name = std.c.getpwuid(i.uid);
-            const group = std.c.getgrgid(i.gid);
-
             const width = std.fmt.count("{d}", .{i.size});
-            const user_width = std.fmt.count("{s}", .{name.?.name.?});
-            const group_width = std.fmt.count("{s}", .{group.?.name.?});
+            const user_width = std.fmt.count("{s}", .{i.username});
+            const group_width = std.fmt.count("{s}", .{i.groupname});
             const pwidth = std.fmt.count("{s}", .{i.name});
             if (width > max_width) max_width = width;
             if (user_width > max_user_width) max_user_width = user_width;
@@ -78,14 +77,12 @@ pub fn printlist(self: Self, stdout: *Io.Writer) !void {
         }
 
         for (list.items) |i| {
-            const name = std.c.getpwuid(i.uid);
-            const group = std.c.getgrgid(i.gid);
 
             try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s} \x1b[36m{[link]s}\n", .{
                 .perm = i.perm,
-                .user = name.?.name.?,
+                .user = i.username,
                 .uwidth = max_user_width,
-                .group = group.?.name.?,
+                .group = i.groupname,
                 .gwidth = max_group_width,
                 .size = i.size,
                 .width = max_width,
@@ -99,16 +96,14 @@ pub fn printlist(self: Self, stdout: *Io.Writer) !void {
         const file = try self.handleFile();
         if (file) |f| {
             const width = std.fmt.count("{d}", .{f.size});
-            const name = std.c.getpwuid(f.uid);
-            const group = std.c.getgrgid(f.gid);
-            const uwidth = std.fmt.count("{s}", .{name.?.name.?});
-            const gwidth = std.fmt.count("{s}", .{group.?.name.?});
+            const uwidth = std.fmt.count("{s}", .{f.username});
+            const gwidth = std.fmt.count("{s}", .{f.groupname});
 
             try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5} \x1b[36m{[link]s}\n", .{
                 .perm = f.perm,
-                .user = name.?.name.?,
+                .user = f.username,
                 .uwidth = uwidth,
-                .group = group.?.name.?,
+                .group = f.groupname,
                 .gwidth = gwidth,
                 .size = f.size,
                 .width = width,
@@ -116,6 +111,8 @@ pub fn printlist(self: Self, stdout: *Io.Writer) !void {
                 .link = f.link orelse "",
             });
             self.allocator.free(f.name);
+            self.allocator.free(f.username);
+            self.allocator.free(f.groupname);
             if (f.link) |link| self.allocator.free(link);
         }
     }
@@ -172,7 +169,7 @@ fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
     buf[7] = if (mode & RDOTH != 0) 'r' else '-';
     buf[8] = if (mode & WROTH != 0) 'w' else '-';
     buf[9] = blk: { 
-        if (mode & EXGRP != 0) {
+        if (mode & EXOTH != 0) {
             if (mode & STICKY != 0) break :blk 't' else break :blk 'x';
         } else {
             if (mode & STICKY != 0) break :blk 'T' else break :blk '-';
@@ -187,8 +184,12 @@ fn handleFile(self: Self) !?FileStats {
     const file = getstatx(path);
     self.allocator.free(path);
     if (file) |f| {
+        const pw = std.c.getpwuid(f.uid);
+        const gr = std.c.getgrgid(f.gid);
         return .{
             .name = try self.allocator.dupe(u8, self.path),
+            .username = try self.allocator.dupe(u8, std.mem.span(pw.?.name.?)),
+            .groupname = try self.allocator.dupe(u8, std.mem.span(gr.?.name.?)),
             .kind = self.kind,
             .mode = f.mode,
             .size = f.size,
@@ -224,8 +225,12 @@ fn handleDir(self: Self) !std.ArrayList(FileStats) {
         self.allocator.free(path);
 
         if (stat) |s| {
+        const pw = std.c.getpwuid(s.uid);
+        const gr = std.c.getgrgid(s.gid);
             try list.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, i.name),
+                .username = try self.allocator.dupe(u8, std.mem.span(pw.?.name.?)),
+                .groupname = try self.allocator.dupe(u8, std.mem.span(gr.?.name.?)),
                 .kind = i.kind,
                 .mode = s.mode,
                 .size = s.size,
@@ -253,6 +258,8 @@ fn handleDir(self: Self) !std.ArrayList(FileStats) {
 pub fn deinit(self: Self, list: *std.ArrayList(FileStats)) void {
     for (list.items) |i| {
         self.allocator.free(i.name);
+        self.allocator.free(i.username);
+        self.allocator.free(i.groupname);
         if (i.link) |link| {
             self.allocator.free(link);
         }
