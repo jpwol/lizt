@@ -26,7 +26,7 @@ pub const FileStats = struct {
     uid: linux.uid_t,
     gid: linux.gid_t,
     nlink: u32,
-    perm: [10]u8
+    perm: [10]u8,
 };
 
 const Statx = struct {
@@ -51,7 +51,66 @@ pub fn init(path: []const u8, stat: File.Stat, io: Io, allocator: Allocator) Sel
     };
 }
 
-pub fn getstatx(path: [*:0]const u8) ?Statx {
+pub fn printlist(self: Self, stdout: *Io.Writer) !void {
+    if (self.kind == .directory) {
+        var list = try self.handleDir();
+        var max_width: usize = 0;
+        var max_user_width: usize = 0;
+        var max_group_width: usize = 0;
+        for (list.items) |i| {
+            const name = std.c.getpwuid(i.uid);
+            const group = std.c.getgrgid(i.gid);
+
+            const width = std.fmt.count("{d}", .{i.size});
+            const user_width = std.fmt.count("{s}", .{name.?.name.?});
+            const group_width = std.fmt.count("{s}", .{group.?.name.?});
+            if (width > max_width) max_width = width;
+            if (user_width > max_user_width) max_user_width = user_width;
+            if (group_width > max_group_width) max_group_width = group_width;
+        }
+
+        for (list.items) |i| {
+            const name = std.c.getpwuid(i.uid);
+            const group = std.c.getgrgid(i.gid);
+
+            try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5}\n", .{
+                .perm = i.perm,
+                .user = name.?.name.?,
+                .uwidth = max_user_width,
+                .group = group.?.name.?,
+                .gwidth = max_group_width,
+                .size = i.size,
+                .width = max_width,
+                .name = i.name,
+            });
+        }
+
+        self.deinit(&list);
+    } else {
+        const file = try self.handleFile();
+        if (file) |f| {
+            const width = std.fmt.count("{d}", .{f.size});
+            const name = std.c.getpwuid(f.uid);
+            const group = std.c.getgrgid(f.gid);
+            const uwidth = std.fmt.count("{s}", .{name.?.name.?});
+            const gwidth = std.fmt.count("{s}", .{group.?.name.?});
+
+            try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5}\n", .{
+                .perm = f.perm,
+                .user = name.?.name.?,
+                .uwidth = uwidth,
+                .group = group.?.name.?,
+                .gwidth = gwidth,
+                .size = f.size,
+                .width = width,
+                .name = f.name,
+            });
+            self.allocator.free(f.name);
+        }
+    }
+}
+
+fn getstatx(path: [*:0]const u8) ?Statx {
     var statx: linux.Statx = undefined;
     const errno = linux.errno(linux.statx(posix.AT.FDCWD, path, posix.AT.SYMLINK_NOFOLLOW, linux.STATX.BASIC_STATS, &statx));
     switch (errno) {
@@ -69,8 +128,8 @@ pub fn getstatx(path: [*:0]const u8) ?Statx {
 }
 
 fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
-    var buf: [10]u8 = undefined; 
-    buf[0] = switch(kind) {
+    var buf: [10]u8 = undefined;
+    buf[0] = switch (kind) {
         .directory => 'd',
         .sym_link => 'l',
         .block_device => 'b',
@@ -94,17 +153,37 @@ fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
     return buf;
 }
 
-pub fn buildDirList(self: Self) !std.ArrayList(FileStats) {
+fn handleFile(self: Self) !?FileStats {
+    const path = try std.fmt.allocPrintSentinel(self.allocator, "{s}", .{self.path}, 0);
+    const file = getstatx(path);
+    self.allocator.free(path);
+    if (file) |f| {
+        return .{
+            .name = try self.allocator.dupe(u8, self.path),
+            .kind = self.kind,
+            .mode = f.mode,
+            .size = f.size,
+            .nlink = f.nlink,
+            .uid = f.uid,
+            .gid = f.gid,
+            .perm = buildPermString(self.kind, f.mode),
+        };
+    } else {
+        return null;
+    }
+}
+
+fn handleDir(self: Self) !std.ArrayList(FileStats) {
     const d = try Dir.cwd().openDir(self.io, self.path, .{ .follow_symlinks = false, .iterate = true });
     var itr = d.iterate();
 
     var list: std.ArrayList(FileStats) = .empty;
 
     while (try itr.next(self.io)) |i| {
-        const path = try std.fmt.allocPrintSentinel(self.allocator, "{s}/{s}", .{self.path, i.name}, 0);
+        const path = try std.fmt.allocPrintSentinel(self.allocator, "{s}/{s}", .{ self.path, i.name }, 0);
         const stat = getstatx(path);
         self.allocator.free(path);
-        
+
         if (stat) |s| {
             try list.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, i.name),
