@@ -18,6 +18,10 @@ const RDOTH = 0o004;
 const WROTH = 0o002;
 const EXOTH = 0o001;
 
+const SUID   = 0o4000;
+const SGID   = 0o2000;
+const STICKY = 0o1000;
+
 pub const FileStats = struct {
     name: []const u8,
     kind: File.Kind,
@@ -142,13 +146,31 @@ fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
 
     buf[1] = if (mode & RDUSR != 0) 'r' else '-';
     buf[2] = if (mode & WRUSR != 0) 'w' else '-';
-    buf[3] = if (mode & EXUSR != 0) 'x' else '-';
+    buf[3] = blk: { 
+        if (mode & EXUSR != 0) {
+            if (mode & SUID != 0) break :blk 's' else break :blk 'x';
+        } else {
+            if (mode & SUID != 0) break :blk 'S' else break :blk '-';
+        }
+    };
     buf[4] = if (mode & RDGRP != 0) 'r' else '-';
     buf[5] = if (mode & WRGRP != 0) 'w' else '-';
-    buf[6] = if (mode & EXGRP != 0) 'x' else '-';
+    buf[6] = blk: { 
+        if (mode & EXGRP != 0) {
+            if (mode & SGID != 0) break :blk 's' else break :blk 'x';
+        } else {
+            if (mode & SGID != 0) break :blk 'S' else break :blk '-';
+        }
+    };
     buf[7] = if (mode & RDOTH != 0) 'r' else '-';
     buf[8] = if (mode & WROTH != 0) 'w' else '-';
-    buf[9] = if (mode & EXOTH != 0) 'x' else '-';
+    buf[9] = blk: { 
+        if (mode & EXGRP != 0) {
+            if (mode & STICKY != 0) break :blk 't' else break :blk 'x';
+        } else {
+            if (mode & STICKY != 0) break :blk 'T' else break :blk '-';
+        }
+    };
 
     return buf;
 }
