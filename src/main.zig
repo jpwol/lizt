@@ -38,7 +38,8 @@ pub fn main(init: std.process.Init) !void {
         const name = std.c.getpwuid(i.uid);
         const group = std.c.getgrgid(i.gid);
 
-        try stdout.print("\x1b[32m{[user]s} \x1b[33m{[group]s} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5}\n", .{
+        try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s} \x1b[33m{[group]s} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5}\n", .{
+            .perm = i.perm,
             .user = name.?.name.?, 
             .group = group.?.name.?, 
             .size = i.size, 
