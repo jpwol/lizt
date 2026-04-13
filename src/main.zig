@@ -6,7 +6,7 @@ pub fn main(init: std.process.Init) !void {
     defer init.gpa.free(argv);
 
     const stdout = blk: {
-        var buf: [1024]u8 = undefined;
+        var buf: [4096]u8 = undefined;
         var stdout = std.Io.File.stdout().writer(init.io, &buf);
         break :blk &stdout.interface;
     };
