@@ -58,7 +58,7 @@ pub fn getstatx(path: [*:0]const u8) ?Statx {
 }
 
 pub fn buildDirList(self: Self) !std.ArrayList(FileStats) {
-    var d = try Dir.cwd().openDir(self.io, self.path, .{ .follow_symlinks = false, .iterate = true });
+    const d = try Dir.cwd().openDir(self.io, self.path, .{ .follow_symlinks = false, .iterate = true });
     var itr = d.iterate();
 
     var list: std.ArrayList(FileStats) = .empty;
