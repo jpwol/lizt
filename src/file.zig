@@ -18,14 +18,12 @@ const RDOTH = 0o004;
 const WROTH = 0o002;
 const EXOTH = 0o001;
 
-const SUID   = 0o4000;
-const SGID   = 0o2000;
+const SUID = 0o4000;
+const SGID = 0o2000;
 const STICKY = 0o1000;
 
 pub const FileStats = struct {
     name: []const u8,
-    username: []const u8,
-    groupname: []const u8,
     link: ?[]const u8,
     kind: File.Kind,
     mode: u16,
@@ -45,20 +43,24 @@ const Statx = struct {
 };
 
 path: []const u8,
+uname_cache: std.AutoHashMap(linux.uid_t, []const u8),
+grname_cache: std.AutoHashMap(linux.gid_t, []const u8),
 kind: File.Kind,
 io: Io,
 allocator: Allocator,
 
-pub fn init(path: []const u8, stat: File.Stat, io: Io, allocator: Allocator) Self {
+pub fn init(path: []const u8, stat: File.Kind, io: Io, allocator: Allocator) Self {
     return .{
         .path = path,
-        .kind = stat.kind,
+        .kind = stat,
         .io = io,
         .allocator = allocator,
+        .uname_cache = .init(allocator),
+        .grname_cache = .init(allocator),
     };
 }
 
-pub fn printlist(self: Self, stdout: *Io.Writer) !void {
+pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
     if (self.kind == .directory) {
         var list = try self.handleDir();
         var max_width: usize = 0;
@@ -66,28 +68,28 @@ pub fn printlist(self: Self, stdout: *Io.Writer) !void {
         var max_group_width: usize = 0;
         var max_pwidth: usize = 0;
         for (list.items) |i| {
-            const width = std.fmt.count("{d}", .{i.size});
-            const user_width = std.fmt.count("{s}", .{i.username});
-            const group_width = std.fmt.count("{s}", .{i.groupname});
-            const pwidth = std.fmt.count("{s}", .{i.name});
+            const uname = self.getUserName(i.uid);
+            const gname = self.getGroupName(i.gid);
+            var n = i.size;
+            var width: usize = 1;
+            while (n >= 10) : (n /= 10) width += 1;
             if (width > max_width) max_width = width;
-            if (user_width > max_user_width) max_user_width = user_width;
-            if (group_width > max_group_width) max_group_width = group_width;
-            if (pwidth > max_pwidth) max_pwidth = pwidth;
+            if (uname.len > max_user_width) max_user_width = uname.len;
+            if (gname.len > max_group_width) max_group_width = gname.len;
+            if (i.name.len > max_pwidth) max_pwidth = i.name.len;
         }
 
         for (list.items) |i| {
-
             try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s} \x1b[36m{[link]s}\n", .{
                 .perm = i.perm,
-                .user = i.username,
+                .user = self.getUserName(i.uid),
                 .uwidth = max_user_width,
-                .group = i.groupname,
+                .group = self.getGroupName(i.gid),
                 .gwidth = max_group_width,
                 .size = i.size,
                 .width = max_width,
                 .name = i.name,
-                .link = i.link orelse ""
+                .link = i.link orelse "",
             });
         }
 
@@ -96,14 +98,14 @@ pub fn printlist(self: Self, stdout: *Io.Writer) !void {
         const file = try self.handleFile();
         if (file) |f| {
             const width = std.fmt.count("{d}", .{f.size});
-            const uwidth = std.fmt.count("{s}", .{f.username});
-            const gwidth = std.fmt.count("{s}", .{f.groupname});
+            const uwidth = self.getUserName(f.uid).len;
+            const gwidth = self.getGroupName(f.gid).len;
 
             try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5} \x1b[36m{[link]s}\n", .{
                 .perm = f.perm,
-                .user = f.username,
+                .user = self.getUserName(f.uid),
                 .uwidth = uwidth,
-                .group = f.groupname,
+                .group = self.getGroupName(f.gid),
                 .gwidth = gwidth,
                 .size = f.size,
                 .width = width,
@@ -111,16 +113,22 @@ pub fn printlist(self: Self, stdout: *Io.Writer) !void {
                 .link = f.link orelse "",
             });
             self.allocator.free(f.name);
-            self.allocator.free(f.username);
-            self.allocator.free(f.groupname);
             if (f.link) |link| self.allocator.free(link);
         }
     }
 }
 
-fn getstatx(path: [*:0]const u8) ?Statx {
+fn getstatx(handle: linux.fd_t, path: [:0]const u8) ?Statx {
     var statx: linux.Statx = undefined;
-    const errno = linux.errno(linux.statx(posix.AT.FDCWD, path, posix.AT.SYMLINK_NOFOLLOW, linux.STATX.BASIC_STATS, &statx));
+    const mask = linux.STATX{
+        .MODE = true,
+        .NLINK = true,
+        .UID = true,
+        .GID = true,
+        .MTIME = true,
+        .SIZE = true,
+    };
+    const errno = linux.errno(linux.statx(handle, @ptrCast(path), posix.AT.SYMLINK_NOFOLLOW | posix.AT.STATX_SYNC_AS_STAT | posix.AT.NO_AUTOMOUNT, mask, &statx));
     switch (errno) {
         .SUCCESS => {
             return Statx{
@@ -150,7 +158,7 @@ fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
 
     buf[1] = if (mode & RDUSR != 0) 'r' else '-';
     buf[2] = if (mode & WRUSR != 0) 'w' else '-';
-    buf[3] = blk: { 
+    buf[3] = blk: {
         if (mode & EXUSR != 0) {
             if (mode & SUID != 0) break :blk 's' else break :blk 'x';
         } else {
@@ -159,7 +167,7 @@ fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
     };
     buf[4] = if (mode & RDGRP != 0) 'r' else '-';
     buf[5] = if (mode & WRGRP != 0) 'w' else '-';
-    buf[6] = blk: { 
+    buf[6] = blk: {
         if (mode & EXGRP != 0) {
             if (mode & SGID != 0) break :blk 's' else break :blk 'x';
         } else {
@@ -168,7 +176,7 @@ fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
     };
     buf[7] = if (mode & RDOTH != 0) 'r' else '-';
     buf[8] = if (mode & WROTH != 0) 'w' else '-';
-    buf[9] = blk: { 
+    buf[9] = blk: {
         if (mode & EXOTH != 0) {
             if (mode & STICKY != 0) break :blk 't' else break :blk 'x';
         } else {
@@ -179,17 +187,30 @@ fn buildPermString(kind: File.Kind, mode: u16) [10]u8 {
     return buf;
 }
 
-fn handleFile(self: Self) !?FileStats {
-    const path = try std.fmt.allocPrintSentinel(self.allocator, "{s}", .{self.path}, 0);
-    const file = getstatx(path);
-    self.allocator.free(path);
+fn getUserName(self: *Self, uid: linux.uid_t) []const u8 {
+    if (self.uname_cache.get(uid)) |name| return name;
+    const pw = std.c.getpwuid(uid);
+    const name = self.allocator.dupe(u8, std.mem.span(pw.?.name.?)) catch return "";
+    self.uname_cache.put(uid, name) catch {};
+    return name;
+}
+
+fn getGroupName(self: *Self, gid: linux.gid_t) []const u8 {
+    if (self.grname_cache.get(gid)) |name| return name;
+    const gr = std.c.getgrgid(gid);
+    const name = self.allocator.dupe(u8, std.mem.span(gr.?.name.?)) catch return "";
+    self.grname_cache.put(gid, name) catch {};
+    return name;
+}
+
+fn handleFile(self: *Self) !?FileStats {
+    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    @memcpy(path_buf[0..self.path.len], self.path);
+    path_buf[self.path.len] = 0;
+    const file = getstatx(posix.AT.FDCWD, &path_buf);
     if (file) |f| {
-        const pw = std.c.getpwuid(f.uid);
-        const gr = std.c.getgrgid(f.gid);
         return .{
             .name = try self.allocator.dupe(u8, self.path),
-            .username = try self.allocator.dupe(u8, std.mem.span(pw.?.name.?)),
-            .groupname = try self.allocator.dupe(u8, std.mem.span(gr.?.name.?)),
             .kind = self.kind,
             .mode = f.mode,
             .size = f.size,
@@ -200,37 +221,36 @@ fn handleFile(self: Self) !?FileStats {
             .link = blk: {
                 if (self.kind == .sym_link) {
                     var buf: [std.fs.max_path_bytes]u8 = undefined;
-                    const n = try Dir.readLink(Dir.cwd(), self.io, self.path, buf[3..]);
+                    const rc = linux.readlinkat(posix.AT.FDCWD, @ptrCast(&path_buf), buf[3..], buf.len-3);
+                    const n = std.math.cast(usize, rc) orelse break :blk null;
+                    // const n = try Dir.readLink(Dir.cwd(), self.io, self.path, buf[3..]);
                     buf[0..3].* = "-> ".*;
-                    break :blk try self.allocator.dupe(u8, buf[0..n + 3]);
+                    break :blk try self.allocator.dupe(u8, buf[0 .. n + 3]);
                 } else {
                     break :blk null;
                 }
-            }
+            },
         };
     } else {
         return null;
     }
 }
 
-fn handleDir(self: Self) !std.ArrayList(FileStats) {
+fn handleDir(self: *Self) !std.ArrayList(FileStats) {
     const d = try Dir.cwd().openDir(self.io, self.path, .{ .follow_symlinks = true, .iterate = true });
     var itr = d.iterate();
 
     var list: std.ArrayList(FileStats) = .empty;
 
     while (try itr.next(self.io)) |i| {
-        const path = try std.fmt.allocPrintSentinel(self.allocator, "{s}/{s}", .{ self.path, i.name }, 0);
-        const stat = getstatx(path);
-        self.allocator.free(path);
+        var name_buf: [std.fs.max_name_bytes:0]u8 = undefined;
+        @memcpy(name_buf[0..i.name.len], i.name);
+        name_buf[i.name.len] = 0;
+        const stat = getstatx(d.handle, &name_buf);
 
         if (stat) |s| {
-        const pw = std.c.getpwuid(s.uid);
-        const gr = std.c.getgrgid(s.gid);
             try list.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, i.name),
-                .username = try self.allocator.dupe(u8, std.mem.span(pw.?.name.?)),
-                .groupname = try self.allocator.dupe(u8, std.mem.span(gr.?.name.?)),
                 .kind = i.kind,
                 .mode = s.mode,
                 .size = s.size,
@@ -241,13 +261,15 @@ fn handleDir(self: Self) !std.ArrayList(FileStats) {
                 .link = blk: {
                     if (i.kind == .sym_link) {
                         var buf: [std.fs.max_path_bytes]u8 = undefined;
-                        const n = try Dir.readLink(d, self.io, i.name, buf[3..]);
+                        const rc = linux.readlinkat(d.handle, @ptrCast(&name_buf), buf[3..], buf.len-3);
+                        const n = std.math.cast(usize, rc) orelse continue;
+                        // const n = try Dir.readLink(d, self.io, i.name, buf[3..]);
                         buf[0..3].* = "-> ".*;
-                        break :blk try self.allocator.dupe(u8, buf[0..n + 3]);
+                        break :blk try self.allocator.dupe(u8, buf[0 .. n + 3]);
                     } else {
                         break :blk null;
                     }
-                }
+                },
             });
         }
     }
@@ -255,11 +277,9 @@ fn handleDir(self: Self) !std.ArrayList(FileStats) {
     return list;
 }
 
-pub fn deinit(self: Self, list: *std.ArrayList(FileStats)) void {
+pub fn deinit(self: *Self, list: *std.ArrayList(FileStats)) void {
     for (list.items) |i| {
         self.allocator.free(i.name);
-        self.allocator.free(i.username);
-        self.allocator.free(i.groupname);
         if (i.link) |link| {
             self.allocator.free(link);
         }
