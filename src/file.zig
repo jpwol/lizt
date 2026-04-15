@@ -80,7 +80,7 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
         }
 
         for (list.items) |i| {
-            try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s} \x1b[36m{[link]s}\n", .{
+            try stdout.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]d:>[width]} │ \x1b[33m{[name]s} \x1b[36m{[link]s}\n", .{
                 .perm = i.perm,
                 .user = self.getUserName(i.uid),
                 .uwidth = max_user_width,
@@ -101,7 +101,7 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
             const uwidth = self.getUserName(f.uid).len;
             const gwidth = self.getGroupName(f.gid).len;
 
-            try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} \x1b[33m{[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5} \x1b[36m{[link]s}\n", .{
+            try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5} \x1b[36m{[link]s}\n", .{
                 .perm = f.perm,
                 .user = self.getUserName(f.uid),
                 .uwidth = uwidth,
@@ -221,7 +221,7 @@ fn handleFile(self: *Self) !?FileStats {
             .link = blk: {
                 if (self.kind == .sym_link) {
                     var buf: [std.fs.max_path_bytes]u8 = undefined;
-                    const rc = linux.readlinkat(posix.AT.FDCWD, @ptrCast(&path_buf), buf[3..], buf.len-3);
+                    const rc = linux.readlinkat(posix.AT.FDCWD, @ptrCast(&path_buf), buf[3..], buf.len - 3);
                     const n = std.math.cast(usize, rc) orelse break :blk null;
                     // const n = try Dir.readLink(Dir.cwd(), self.io, self.path, buf[3..]);
                     buf[0..3].* = "-> ".*;
@@ -261,7 +261,7 @@ fn handleDir(self: *Self) !std.ArrayList(FileStats) {
                 .link = blk: {
                     if (i.kind == .sym_link) {
                         var buf: [std.fs.max_path_bytes]u8 = undefined;
-                        const rc = linux.readlinkat(d.handle, @ptrCast(&name_buf), buf[3..], buf.len-3);
+                        const rc = linux.readlinkat(d.handle, @ptrCast(&name_buf), buf[3..], buf.len - 3);
                         const n = std.math.cast(usize, rc) orelse continue;
                         // const n = try Dir.readLink(d, self.io, i.name, buf[3..]);
                         buf[0..3].* = "-> ".*;
