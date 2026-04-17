@@ -32,20 +32,41 @@ pub fn main(init: std.process.Init) !void {
         break :blk &stderr.interface;
     };
 
-    const path = if (res.argv.len == 2) res.argv[1] else ".";
-
     const cwd = std.Io.Dir.cwd();
-    const s = cwd.statFile(init.io, path, .{ .follow_symlinks = false }) catch |err| {
-        try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
-        return;
-    };
+    if (res.argv.len <= 2) {
+        const path = if (res.argv.len == 2) res.argv[1] else ".";
+        const s = cwd.statFile(init.io, path, .{ .follow_symlinks = false }) catch |err| {
+            try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
+            return;
+        };
 
-    var filestat = try file.init(path, s.kind, init.io, allocator, .{ .long = res.flags.long, .column = res.flags.column, .hidden = res.flags.hidden });
+        var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .hidden = res.flags.hidden });
 
-    filestat.printlist(stdout) catch |err| {
-        try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
-        return;
-    };
-    
+        filestat.printlist() catch |err| {
+            try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
+            return;
+        };
+    } else {
+        for (res.argv[1..], 1..) |path, idx| {
+            try stdout.print("{s}:\n", .{path});
+            const s = cwd.statFile(init.io, path, .{ .follow_symlinks = false }) catch |err| {
+                try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
+                return;
+            };
+
+            var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .hidden = res.flags.hidden });
+
+            filestat.printlist() catch |err| {
+                try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
+                return;
+            };
+
+            if (idx < res.argv.len - 1)
+                try stdout.writeByte('\n');
+        }
+    }
+
+
+
     try stdout.flush();
 }
