@@ -2,6 +2,7 @@ const Self = @This();
 
 const std = @import("std");
 const Io = std.Io;
+const Terminal = Io.Terminal;
 const File = Io.File;
 const Dir = Io.Dir;
 const linux = std.os.linux;
@@ -9,6 +10,7 @@ const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
 const opts = @import("opts.zig");
+const ftype = @import("ftype.zig");
 
 const RDUSR = 0o400;
 const WRUSR = 0o200;
@@ -30,6 +32,7 @@ pub const FileStatLong = struct {
     gname: []const u8,
     link: ?[]const u8,
     kind: File.Kind,
+    exec: bool,
     mode: u16,
     size: u64,
     nlink: u32,
@@ -39,6 +42,7 @@ pub const FileStatLong = struct {
 pub const FileStatShort = struct {
     name: []const u8,
     kind: File.Kind,
+    exec: bool,
 };
 
 const Statx = struct {
@@ -55,9 +59,10 @@ grname_cache: std.AutoHashMap(linux.gid_t, []const u8),
 kind: File.Kind,
 io: Io,
 allocator: Allocator,
+term: Terminal,
 opt: opts.Opts,
 
-pub fn init(path: []const u8, kind: File.Kind, io: Io, allocator: Allocator, opt: opts.Opts) !Self {
+pub fn init(path: []const u8, kind: File.Kind, io: Io, writer: *Io.Writer, allocator: Allocator, opt: opts.Opts) !Self {
     if (opt.long and opt.column) return error.LongAndColumn;
 
     if (opt.long) {
@@ -68,6 +73,7 @@ pub fn init(path: []const u8, kind: File.Kind, io: Io, allocator: Allocator, opt
             .allocator = allocator,
             .uname_cache = .init(allocator),
             .grname_cache = .init(allocator),
+            .term = .{ .mode = try .detect(io, File.stdout(), false, true), .writer = writer },
             .opt = opt,
         };
     } else {
@@ -76,9 +82,10 @@ pub fn init(path: []const u8, kind: File.Kind, io: Io, allocator: Allocator, opt
             .kind = kind,
             .io = io,
             .allocator = allocator,
-            .opt = opt,
             .uname_cache = undefined,
             .grname_cache = undefined,
+            .opt = opt,
+            .term = .{ .mode = try .detect(io, File.stdout(), false, true), .writer = writer },
         };
     }
 }
@@ -92,7 +99,7 @@ fn lessThanShort(context: void, a: FileStatShort, b: FileStatShort) bool {
     return std.mem.lessThan(u8, a.name, b.name);
 }
 
-pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
+pub fn printlist(self: *Self) !void {
     if (self.kind == .directory) {
         if (self.opt.long) {
             var list = try self.handleDirLong();
@@ -112,7 +119,7 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
             }
 
             for (list.items) |i| {
-                try stdout.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]d:>[width]} │ \x1b[33m{[name]s} \x1b[36m{[link]s}\n", .{
+                try self.term.writer.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]d:>[width]} │ ", .{
                     .perm = i.perm,
                     .user = i.uname,
                     .uwidth = max_user_width,
@@ -120,6 +127,9 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
                     .gwidth = max_group_width,
                     .size = i.size,
                     .width = max_width,
+                });
+                try ftype.setTermColor(i.kind, self.term, i.exec);
+                try self.term.writer.print("{[name]s} \x1b[36m{[link]s}\x1b[0m\n", .{
                     .name = i.name,
                     .link = i.link orelse "",
                 });
@@ -131,18 +141,52 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
             std.mem.sort(FileStatShort, list.items, {}, lessThanShort);
             if (self.opt.column) {
                 for (list.items) |i| {
-                    try stdout.print("\x1b[33m{[name]s}\n", .{
+                    try ftype.setTermColor(i.kind, self.term, i.exec);
+                    try self.term.writer.print("{[name]s}\x1b[0m\n", .{
                         .name = i.name,
                     });
                 }
             } else {
-                for (list.items) |i| {
-                    try stdout.print("\x1b[33m{[name]s:<[width]}", .{
-                        .name = i.name,
-                        .width = i.name.len + 2,
-                    });
+                var w: std.c.winsize = undefined;
+                const errno = posix.errno(linux.ioctl(1, posix.T.IOCGWINSZ, @intFromPtr(&w)));
+                switch (errno) {
+                    .SUCCESS => {},
+                    else => return error.Ioctl,
                 }
-                try stdout.writeByte('\n');
+                var max_width: usize = 0;
+                for (list.items) |i| {
+                    if (i.name.len > max_width) max_width = i.name.len;
+                }
+                const col_width = max_width + 2;
+                const num_cols = @max(1, w.col / col_width);
+                const num_rows = (list.items.len + num_cols - 1) / num_cols;
+
+                var col_widths = try self.allocator.alloc(usize, num_cols);
+                defer self.allocator.free(col_widths);
+                @memset(col_widths, 0);
+                for (list.items, 0..) |item, idx| {
+                    const col = idx / num_rows;
+                    if (item.name.len > col_widths[col]) col_widths[col] = item.name.len;
+                }
+
+                for (0..num_rows) |row| {
+                    for (0..num_cols) |col| {
+                        const idx = col * num_rows + row;
+                        if (idx >= list.items.len) break;
+                        const item = list.items[idx];
+                        const is_last = (col == num_cols - 1) or (idx + num_rows >= list.items.len);
+
+                        try ftype.setTermColor(item.kind, self.term, item.exec);
+                        if (is_last) {
+                            try self.term.writer.print("{s}\x1b[0m\n", .{item.name});
+                        } else {
+                            try self.term.writer.print("{[name]s:<[width]}\x1b[0m", .{
+                                .name = item.name,
+                                .width = col_widths[col] + 2,
+                            });
+                        }
+                    }
+                }
             }
         }
     } else {
@@ -153,7 +197,7 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
                 const uwidth = f.uname.len;
                 const gwidth = f.gname.len;
 
-                try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5} \x1b[36m{[link]s}\n", .{
+                try self.term.writer.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} ", .{
                     .perm = f.perm,
                     .user = f.uname,
                     .uwidth = uwidth,
@@ -161,6 +205,9 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
                     .gwidth = gwidth,
                     .size = f.size,
                     .width = width,
+                });
+                try ftype.setTermColor(f.kind, self.term, f.exec);
+                try self.term.writer.print("{[name]s:<5} \x1b[36m{[link]s}\n", .{
                     .name = f.name,
                     .link = f.link orelse "",
                 });
@@ -169,9 +216,12 @@ pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
             }
         } else {
             const file = try self.handleFileShort();
-            try stdout.print("\x1b[33m{[name]s}\n", .{
-                .name = file.name,
-            });
+            if (file) |f| {
+                try ftype.setTermColor(f.kind, self.term, f.exec);
+                try self.term.writer.print("{[name]s}\n", .{
+                    .name = f.name,
+                });
+            }
         }
     }
 }
@@ -253,11 +303,20 @@ fn getGroupName(self: *Self, gid: linux.gid_t) []const u8 {
     return name;
 }
 
-fn handleFileShort(self: *Self) !FileStatShort {
-    return .{
-        .name = self.path,
-        .kind = self.kind,
-    };
+fn handleFileShort(self: *Self) !?FileStatShort {
+    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    @memcpy(path_buf[0..self.path.len], self.path);
+    path_buf[self.path.len] = 0;
+    const file = getstatx(posix.AT.FDCWD, &path_buf);
+    if (file) |f| {
+        return .{
+            .name = self.path,
+            .kind = self.kind,
+            .exec = if (f.mode & EXUSR != 0 or f.mode & EXGRP != 0 or f.mode & EXOTH != 0) true else false,
+        };
+    } else {
+        return null;
+    }
 }
 
 fn handleFileLong(self: *Self) !?FileStatLong {
@@ -271,6 +330,7 @@ fn handleFileLong(self: *Self) !?FileStatLong {
             .uname = self.getUserName(f.uid),
             .gname = self.getGroupName(f.gid),
             .kind = self.kind,
+            .exec = if (f.mode & EXUSR != 0 or f.mode & EXGRP != 0 or f.mode & EXOTH != 0) true else false,
             .mode = f.mode,
             .size = f.size,
             .nlink = f.nlink,
@@ -298,19 +358,18 @@ fn handleDirShort(self: *Self) !std.ArrayList(FileStatShort) {
     var itr = d.iterate();
     var list: std.ArrayList(FileStatShort) = .empty;
 
-    if (self.opt.hidden) {
-        while (try itr.next(self.io)) |i| {
+    while (try itr.next(self.io)) |i| {
+        if (!self.opt.hidden and i.name[0] == '.') continue;
+
+        var name_buf: [std.fs.max_name_bytes:0]u8 = undefined;
+        @memcpy(name_buf[0..i.name.len], i.name);
+        name_buf[i.name.len] = 0;
+        const stat = getstatx(d.handle, &name_buf);
+        if (stat) |s| {
             try list.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, i.name),
                 .kind = i.kind,
-            });
-        }
-    } else {
-        while (try itr.next(self.io)) |i| {
-            if (i.name[0] == '.') continue;
-            try list.append(self.allocator, .{
-                .name = try self.allocator.dupe(u8, i.name),
-                .kind = i.kind,
+                .exec = if (s.mode & EXUSR != 0 or s.mode & EXGRP != 0 or s.mode & EXOTH != 0) true else false,
             });
         }
     }
@@ -325,6 +384,7 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
     var list: std.ArrayList(FileStatLong) = .empty;
 
     while (try itr.next(self.io)) |i| {
+        if (!self.opt.hidden and i.name[0] == '.') continue;
         var name_buf: [std.fs.max_name_bytes:0]u8 = undefined;
         @memcpy(name_buf[0..i.name.len], i.name);
         name_buf[i.name.len] = 0;
@@ -336,6 +396,7 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
                 .uname = self.getUserName(s.uid),
                 .gname = self.getGroupName(s.gid),
                 .kind = i.kind,
+                .exec = if (s.mode & EXUSR != 0 or s.mode & EXGRP != 0 or s.mode & EXOTH != 0) true else false,
                 .mode = s.mode,
                 .size = s.size,
                 .nlink = s.nlink,
@@ -351,7 +412,7 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
                         break :blk null;
                     }
                 },
-            });
+                });
         }
     }
 
