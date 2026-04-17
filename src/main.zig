@@ -1,11 +1,26 @@
 const std = @import("std");
 const file = @import("file.zig");
+const args = @import("args.zig");
 const linux = std.os.linux;
 const posix = std.posix;
 
+const Args = struct {
+    help: bool = false,
+    long: bool = false,
+    column: bool = false,
+    hidden: bool = false,
+
+    pub const shorthands = .{
+        .h = "help",
+        .l = "long",
+        .c = "column",
+        .a = "hidden",
+    };
+};
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
-    const argv = try init.minimal.args.toSlice(allocator);
+    const res = try args.parse(Args, allocator, init.minimal.args);
 
     const stdout = blk: {
         var buf: [4096]u8 = undefined;
@@ -17,18 +32,18 @@ pub fn main(init: std.process.Init) !void {
         break :blk &stderr.interface;
     };
 
-    const path = if (argv.len == 2) argv[1] else ".";
+    const path = if (res.argv.len == 2) res.argv[1] else ".";
 
     const cwd = std.Io.Dir.cwd();
     const s = cwd.statFile(init.io, path, .{ .follow_symlinks = false }) catch |err| {
-        try stderr.print("{s}: '{s}': {s}\n", .{argv[0], path, @errorName(err)});
+        try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
         return;
     };
 
-    var filestat = file.init(path, s.kind, init.io, allocator);
+    var filestat = try file.init(path, s.kind, init.io, allocator, .{ .long = res.flags.long, .column = res.flags.column, .hidden = res.flags.hidden });
 
     filestat.printlist(stdout) catch |err| {
-        try stderr.print("{s}: '{s}': {s}\n", .{argv[0], path, @errorName(err)});
+        try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
         return;
     };
     

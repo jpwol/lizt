@@ -8,6 +8,8 @@ const linux = std.os.linux;
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
+const opts = @import("opts.zig");
+
 const RDUSR = 0o400;
 const WRUSR = 0o200;
 const EXUSR = 0o100;
@@ -22,16 +24,21 @@ const SUID = 0o4000;
 const SGID = 0o2000;
 const STICKY = 0o1000;
 
-pub const FileStats = struct {
+pub const FileStatLong = struct {
     name: []const u8,
+    uname: []const u8,
+    gname: []const u8,
     link: ?[]const u8,
     kind: File.Kind,
     mode: u16,
     size: u64,
-    uid: linux.uid_t,
-    gid: linux.gid_t,
     nlink: u32,
     perm: [10]u8,
+};
+
+pub const FileStatShort = struct {
+    name: []const u8,
+    kind: File.Kind,
 };
 
 const Statx = struct {
@@ -48,87 +55,130 @@ grname_cache: std.AutoHashMap(linux.gid_t, []const u8),
 kind: File.Kind,
 io: Io,
 allocator: Allocator,
+opt: opts.Opts,
 
-pub fn init(path: []const u8, stat: File.Kind, io: Io, allocator: Allocator) Self {
-    return .{
-        .path = path,
-        .kind = stat,
-        .io = io,
-        .allocator = allocator,
-        .uname_cache = .init(allocator),
-        .grname_cache = .init(allocator),
-    };
+pub fn init(path: []const u8, kind: File.Kind, io: Io, allocator: Allocator, opt: opts.Opts) !Self {
+    if (opt.long and opt.column) return error.LongAndColumn;
+
+    if (opt.long) {
+        return .{
+            .path = path,
+            .kind = kind,
+            .io = io,
+            .allocator = allocator,
+            .uname_cache = .init(allocator),
+            .grname_cache = .init(allocator),
+            .opt = opt,
+        };
+    } else {
+        return .{
+            .path = path,
+            .kind = kind,
+            .io = io,
+            .allocator = allocator,
+            .opt = opt,
+            .uname_cache = undefined,
+            .grname_cache = undefined,
+        };
+    }
+}
+
+fn lessThanLong(context: void, a: FileStatLong, b: FileStatLong) bool {
+    _ = context;
+    return std.mem.lessThan(u8, a.name, b.name);
+}
+fn lessThanShort(context: void, a: FileStatShort, b: FileStatShort) bool {
+    _ = context;
+    return std.mem.lessThan(u8, a.name, b.name);
 }
 
 pub fn printlist(self: *Self, stdout: *Io.Writer) !void {
     if (self.kind == .directory) {
-        var list = try self.handleDir();
-        var max_width: usize = 0;
-        var max_user_width: usize = 0;
-        var max_group_width: usize = 0;
-        var max_pwidth: usize = 0;
-        for (list.items) |i| {
-            const uname = self.getUserName(i.uid);
-            const gname = self.getGroupName(i.gid);
-            var n = i.size;
-            var width: usize = 1;
-            while (n >= 10) : (n /= 10) width += 1;
-            if (width > max_width) max_width = width;
-            if (uname.len > max_user_width) max_user_width = uname.len;
-            if (gname.len > max_group_width) max_group_width = gname.len;
-            if (i.name.len > max_pwidth) max_pwidth = i.name.len;
-        }
+        if (self.opt.long) {
+            var list = try self.handleDirLong();
+            std.mem.sort(FileStatLong, list.items, {}, lessThanLong);
+            var max_width: usize = 0;
+            var max_user_width: usize = 0;
+            var max_group_width: usize = 0;
+            var max_pwidth: usize = 0;
+            for (list.items) |i| {
+                var n = i.size;
+                var width: usize = 1;
+                while (n >= 10) : (n /= 10) width += 1;
+                if (width > max_width) max_width = width;
+                if (i.uname.len > max_user_width) max_user_width = i.uname.len;
+                if (i.gname.len > max_group_width) max_group_width = i.gname.len;
+                if (i.name.len > max_pwidth) max_pwidth = i.name.len;
+            }
 
-        for (list.items) |i| {
-            try stdout.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]d:>[width]} │ \x1b[33m{[name]s} \x1b[36m{[link]s}\n", .{
-                .perm = i.perm,
-                .user = self.getUserName(i.uid),
-                .uwidth = max_user_width,
-                .group = self.getGroupName(i.gid),
-                .gwidth = max_group_width,
-                .size = i.size,
-                .width = max_width,
-                .name = i.name,
-                .link = i.link orelse "",
-            });
-        }
+            for (list.items) |i| {
+                try stdout.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]d:>[width]} │ \x1b[33m{[name]s} \x1b[36m{[link]s}\n", .{
+                    .perm = i.perm,
+                    .user = i.uname,
+                    .uwidth = max_user_width,
+                    .group = i.gname,
+                    .gwidth = max_group_width,
+                    .size = i.size,
+                    .width = max_width,
+                    .name = i.name,
+                    .link = i.link orelse "",
+                });
+            }
 
-        self.deinit(&list);
+            self.deinit(&list);
+        } else {
+            const list = try self.handleDirShort();
+            std.mem.sort(FileStatShort, list.items, {}, lessThanShort);
+            if (self.opt.column) {
+                for (list.items) |i| {
+                    try stdout.print("\x1b[33m{[name]s}\n", .{
+                        .name = i.name,
+                    });
+                }
+            } else {
+                for (list.items) |i| {
+                    try stdout.print("\x1b[33m{[name]s:<[width]}", .{
+                        .name = i.name,
+                        .width = i.name.len + 2,
+                    });
+                }
+                try stdout.writeByte('\n');
+            }
+        }
     } else {
-        const file = try self.handleFile();
-        if (file) |f| {
-            const width = std.fmt.count("{d}", .{f.size});
-            const uwidth = self.getUserName(f.uid).len;
-            const gwidth = self.getGroupName(f.gid).len;
+        if (self.opt.long) {
+            const file = try self.handleFileLong();
+            if (file) |f| {
+                const width = std.fmt.count("{d}", .{f.size});
+                const uwidth = f.uname.len;
+                const gwidth = f.gname.len;
 
-            try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5} \x1b[36m{[link]s}\n", .{
-                .perm = f.perm,
-                .user = self.getUserName(f.uid),
-                .uwidth = uwidth,
-                .group = self.getGroupName(f.gid),
-                .gwidth = gwidth,
-                .size = f.size,
-                .width = width,
-                .name = f.name,
-                .link = f.link orelse "",
+                try stdout.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} \x1b[35m{[name]s:<5} \x1b[36m{[link]s}\n", .{
+                    .perm = f.perm,
+                    .user = f.uname,
+                    .uwidth = uwidth,
+                    .group = f.gname,
+                    .gwidth = gwidth,
+                    .size = f.size,
+                    .width = width,
+                    .name = f.name,
+                    .link = f.link orelse "",
+                });
+                self.allocator.free(f.name);
+                if (f.link) |link| self.allocator.free(link);
+            }
+        } else {
+            const file = try self.handleFileShort();
+            try stdout.print("\x1b[33m{[name]s}\n", .{
+                .name = file.name,
             });
-            self.allocator.free(f.name);
-            if (f.link) |link| self.allocator.free(link);
         }
     }
 }
 
 fn getstatx(handle: linux.fd_t, path: [:0]const u8) ?Statx {
     var statx: linux.Statx = undefined;
-    const mask = linux.STATX{
-        .MODE = true,
-        .NLINK = true,
-        .UID = true,
-        .GID = true,
-        .MTIME = true,
-        .SIZE = true,
-    };
-    const errno = linux.errno(linux.statx(handle, @ptrCast(path), posix.AT.SYMLINK_NOFOLLOW | posix.AT.STATX_SYNC_AS_STAT | posix.AT.NO_AUTOMOUNT, mask, &statx));
+    const errno = linux.errno(linux.statx(handle, @ptrCast(path), posix.AT.SYMLINK_NOFOLLOW, linux.STATX.BASIC_STATS, &statx));
     switch (errno) {
         .SUCCESS => {
             return Statx{
@@ -203,20 +253,27 @@ fn getGroupName(self: *Self, gid: linux.gid_t) []const u8 {
     return name;
 }
 
-fn handleFile(self: *Self) !?FileStats {
+fn handleFileShort(self: *Self) !FileStatShort {
+    return .{
+        .name = self.path,
+        .kind = self.kind,
+    };
+}
+
+fn handleFileLong(self: *Self) !?FileStatLong {
     var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
     @memcpy(path_buf[0..self.path.len], self.path);
     path_buf[self.path.len] = 0;
     const file = getstatx(posix.AT.FDCWD, &path_buf);
     if (file) |f| {
         return .{
-            .name = try self.allocator.dupe(u8, self.path),
+            .name = self.path,
+            .uname = self.getUserName(f.uid),
+            .gname = self.getGroupName(f.gid),
             .kind = self.kind,
             .mode = f.mode,
             .size = f.size,
             .nlink = f.nlink,
-            .uid = f.uid,
-            .gid = f.gid,
             .perm = buildPermString(self.kind, f.mode),
             .link = blk: {
                 if (self.kind == .sym_link) {
@@ -236,11 +293,36 @@ fn handleFile(self: *Self) !?FileStats {
     }
 }
 
-fn handleDir(self: *Self) !std.ArrayList(FileStats) {
+fn handleDirShort(self: *Self) !std.ArrayList(FileStatShort) {
+    const d = try Dir.cwd().openDir(self.io, self.path, .{ .follow_symlinks = true, .iterate = true });
+    var itr = d.iterate();
+    var list: std.ArrayList(FileStatShort) = .empty;
+
+    if (self.opt.hidden) {
+        while (try itr.next(self.io)) |i| {
+            try list.append(self.allocator, .{
+                .name = try self.allocator.dupe(u8, i.name),
+                .kind = i.kind,
+            });
+        }
+    } else {
+        while (try itr.next(self.io)) |i| {
+            if (i.name[0] == '.') continue;
+            try list.append(self.allocator, .{
+                .name = try self.allocator.dupe(u8, i.name),
+                .kind = i.kind,
+            });
+        }
+    }
+
+    return list;
+}
+
+fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
     const d = try Dir.cwd().openDir(self.io, self.path, .{ .follow_symlinks = true, .iterate = true });
     var itr = d.iterate();
 
-    var list: std.ArrayList(FileStats) = .empty;
+    var list: std.ArrayList(FileStatLong) = .empty;
 
     while (try itr.next(self.io)) |i| {
         var name_buf: [std.fs.max_name_bytes:0]u8 = undefined;
@@ -251,19 +333,18 @@ fn handleDir(self: *Self) !std.ArrayList(FileStats) {
         if (stat) |s| {
             try list.append(self.allocator, .{
                 .name = try self.allocator.dupe(u8, i.name),
+                .uname = self.getUserName(s.uid),
+                .gname = self.getGroupName(s.gid),
                 .kind = i.kind,
                 .mode = s.mode,
                 .size = s.size,
                 .nlink = s.nlink,
-                .uid = s.uid,
-                .gid = s.gid,
                 .perm = buildPermString(i.kind, s.mode),
                 .link = blk: {
                     if (i.kind == .sym_link) {
                         var buf: [std.fs.max_path_bytes]u8 = undefined;
                         const rc = linux.readlinkat(d.handle, @ptrCast(&name_buf), buf[3..], buf.len - 3);
                         const n = std.math.cast(usize, rc) orelse continue;
-                        // const n = try Dir.readLink(d, self.io, i.name, buf[3..]);
                         buf[0..3].* = "-> ".*;
                         break :blk try self.allocator.dupe(u8, buf[0 .. n + 3]);
                     } else {
@@ -277,7 +358,7 @@ fn handleDir(self: *Self) !std.ArrayList(FileStats) {
     return list;
 }
 
-pub fn deinit(self: *Self, list: *std.ArrayList(FileStats)) void {
+pub fn deinit(self: *Self, list: *std.ArrayList(FileStatLong)) void {
     for (list.items) |i| {
         self.allocator.free(i.name);
         if (i.link) |link| {
