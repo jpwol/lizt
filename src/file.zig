@@ -34,7 +34,7 @@ pub const FileStatLong = struct {
     kind: File.Kind,
     exec: bool,
     mode: u16,
-    size: u64,
+    size: []const u8,
     nlink: u32,
     perm: [10]u8,
 };
@@ -104,29 +104,29 @@ pub fn printlist(self: *Self) !void {
         if (self.opt.long) {
             var list = try self.handleDirLong();
             std.mem.sort(FileStatLong, list.items, {}, lessThanLong);
-            var max_width: usize = 0;
+            var max_size_width: usize = 0;
             var max_user_width: usize = 0;
             var max_group_width: usize = 0;
             var max_pwidth: usize = 0;
             for (list.items) |i| {
-                var n = i.size;
-                var width: usize = 1;
-                while (n >= 10) : (n /= 10) width += 1;
-                if (width > max_width) max_width = width;
+                // var n = i.size;
+                // var width: usize = 1;
+                // while (n >= 10) : (n /= 10) width += 1;
+                if (i.size.len > max_size_width) max_size_width = i.size.len;
                 if (i.uname.len > max_user_width) max_user_width = i.uname.len;
                 if (i.gname.len > max_group_width) max_group_width = i.gname.len;
                 if (i.name.len > max_pwidth) max_pwidth = i.name.len;
             }
 
             for (list.items) |i| {
-                try self.term.writer.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]d:>[width]} │ ", .{
+                try self.term.writer.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]s:>[width]} │ ", .{
                     .perm = i.perm,
                     .user = i.uname,
                     .uwidth = max_user_width,
                     .group = i.gname,
                     .gwidth = max_group_width,
                     .size = i.size,
-                    .width = max_width,
+                    .width = max_size_width,
                 });
                 try ftype.setTermColor(i.kind, self.term, i.exec);
                 try self.term.writer.print("{[name]s} \x1b[36m{[link]s}\x1b[0m\n", .{
@@ -193,11 +193,11 @@ pub fn printlist(self: *Self) !void {
         if (self.opt.long) {
             const file = try self.handleFileLong();
             if (file) |f| {
-                const width = std.fmt.count("{d}", .{f.size});
+                const width = f.size.len;
                 const uwidth = f.uname.len;
                 const gwidth = f.gname.len;
 
-                try self.term.writer.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]d:>[width]} ", .{
+                try self.term.writer.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]s:>[width]} ", .{
                     .perm = f.perm,
                     .user = f.uname,
                     .uwidth = uwidth,
@@ -332,7 +332,7 @@ fn handleFileLong(self: *Self) !?FileStatLong {
             .kind = self.kind,
             .exec = if (f.mode & EXUSR != 0 or f.mode & EXGRP != 0 or f.mode & EXOTH != 0) true else false,
             .mode = f.mode,
-            .size = f.size,
+            .size = try self.getSizeString(f.size),
             .nlink = f.nlink,
             .perm = buildPermString(self.kind, f.mode),
             .link = blk: {
@@ -398,7 +398,7 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
                 .kind = i.kind,
                 .exec = if (s.mode & EXUSR != 0 or s.mode & EXGRP != 0 or s.mode & EXOTH != 0) true else false,
                 .mode = s.mode,
-                .size = s.size,
+                .size = try self.getSizeString(s.size),
                 .nlink = s.nlink,
                 .perm = buildPermString(i.kind, s.mode),
                 .link = blk: {
@@ -417,6 +417,21 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
     }
 
     return list;
+}
+
+fn getSizeString(self: *Self, size: u64) ![]const u8 {
+    const suffixes = [_][]const u8{ "B", "K", "M", "G", "T", "P" };
+    var value: f64 = @floatFromInt(size);
+    var i: usize = 0;
+    while (value >= 1024 and i < suffixes.len ) : (i += 1) {
+        value /= 1024;
+    }
+    var buf: [256]u8 = undefined;
+    if (i == 0) {
+        return self.allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}{s}", .{size, suffixes[i]}));
+    } else {
+        return self.allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}{s}", .{std.math.ceil(value), suffixes[i]}));
+    }
 }
 
 pub fn deinit(self: *Self, list: *std.ArrayList(FileStatLong)) void {
