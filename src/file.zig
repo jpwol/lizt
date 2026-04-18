@@ -129,7 +129,7 @@ pub fn printlist(self: *Self) !void {
                     .width = max_size_width,
                 });
                 try ftype.setTermColor(i.kind, self.term, i.exec);
-                try self.term.writer.print("{[name]s} \x1b[36m{[link]s}\x1b[0m\n", .{
+                try self.term.writer.print("{[name]s} \x1b[0;90m{[link]s}\x1b[0m\n", .{
                     .name = i.name,
                     .link = i.link orelse "",
                 });
@@ -207,7 +207,7 @@ pub fn printlist(self: *Self) !void {
                     .width = width,
                 });
                 try ftype.setTermColor(f.kind, self.term, f.exec);
-                try self.term.writer.print("{[name]s:<5} \x1b[36m{[link]s}\n", .{
+                try self.term.writer.print("{[name]s:<5} \x1b[0;90m{[link]s}\n", .{
                     .name = f.name,
                     .link = f.link orelse "",
                 });
