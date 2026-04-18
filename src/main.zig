@@ -1,8 +1,8 @@
 const std = @import("std");
 const file = @import("file.zig");
-const args = @import("args.zig");
 const linux = std.os.linux;
 const posix = std.posix;
+const zopt = @import("zopt");
 
 const Args = struct {
     help: bool = false,
@@ -10,7 +10,7 @@ const Args = struct {
     column: bool = false,
     hidden: bool = false,
 
-    pub const shorthands = .{
+    pub const short = .{
         .h = "help",
         .l = "long",
         .c = "column",
@@ -20,7 +20,7 @@ const Args = struct {
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
-    const res = try args.parse(Args, allocator, init.minimal.args);
+    const res = try zopt.parse(Args, allocator, init.minimal.args);
 
     const stdout = blk: {
         var buf: [4096]u8 = undefined;

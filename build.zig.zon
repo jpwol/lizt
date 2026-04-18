@@ -1,6 +1,12 @@
 .{
     .name = .lizt,
     .version = "0.0.1",
+    .dependencies = .{
+        .zopt = .{
+            .url = "git+https://github.com/jpwol/zopt#b139b4cdcf3e773d99c902b1bf837e52fb522edc",
+            .hash = "zopt-0.0.1-hucSTV0PAABMdvRcRF8W2vGwuH2HVgYOYj6bu7N8235v",
+        },
+    },
     .minimum_zig_version = "0.16.0-dev.3142+5ccfeb926",
     .paths = .{""},
     .fingerprint = 0x950a43513767eb9d,
