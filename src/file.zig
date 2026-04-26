@@ -92,11 +92,11 @@ pub fn init(path: []const u8, kind: File.Kind, io: Io, writer: *Io.Writer, alloc
 
 fn lessThanLong(context: void, a: FileStatLong, b: FileStatLong) bool {
     _ = context;
-    return std.mem.lessThan(u8, a.name, b.name);
+    return std.ascii.lessThanIgnoreCase(a.name, b.name);
 }
 fn lessThanShort(context: void, a: FileStatShort, b: FileStatShort) bool {
     _ = context;
-    return std.mem.lessThan(u8, a.name, b.name);
+    return std.ascii.lessThanIgnoreCase(a.name, b.name);
 }
 
 pub fn printlist(self: *Self) !void {
