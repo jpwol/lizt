@@ -119,7 +119,7 @@ pub fn printlist(self: *Self) !void {
             }
 
             for (list.items) |i| {
-                try self.term.writer.print("│ \x1b[36m{[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} │ \x1b[34m{[size]s:>[width]} │ ", .{
+                try self.term.writer.print("\x1b[36m│ {[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[36m│ \x1b[34m{[size]s:>[width]} \x1b[36m│ ", .{
                     .perm = i.perm,
                     .user = i.uname,
                     .uwidth = max_user_width,
