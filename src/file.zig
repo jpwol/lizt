@@ -384,7 +384,7 @@ fn handleDirShort(self: *Self) !std.ArrayList(FileStatShort) {
     var list: std.ArrayList(FileStatShort) = .empty;
 
     while (try itr.next(self.io)) |i| {
-        if (!self.opt.hidden and i.name[0] == '.') continue;
+        if (!self.opt.all and i.name[0] == '.') continue;
 
         var name_buf: [std.fs.max_name_bytes:0]u8 = undefined;
         @memcpy(name_buf[0..i.name.len], i.name);
@@ -399,7 +399,7 @@ fn handleDirShort(self: *Self) !std.ArrayList(FileStatShort) {
         }
     }
 
-    if (self.opt.hidden) {
+    if (self.opt.all) {
         try list.insert(self.allocator, 0, .{
             .name = ".",
             .kind = .directory,
@@ -422,7 +422,7 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
     var list: std.ArrayList(FileStatLong) = .empty;
 
     while (try itr.next(self.io)) |i| {
-        if (!self.opt.hidden and i.name[0] == '.') continue;
+        if (!self.opt.all and i.name[0] == '.') continue;
         var name_buf: [std.fs.max_name_bytes:0]u8 = undefined;
         @memcpy(name_buf[0..i.name.len], i.name);
         name_buf[i.name.len] = 0;
@@ -454,7 +454,7 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
         }
     }
 
-    if (self.opt.hidden) {
+    if (self.opt.all) {
         const this_dir_stat = getstatx(d.handle, ".");
         const prev_dir_stat = getstatx(d.handle, "..");
         if (this_dir_stat) |dir| {

@@ -8,13 +8,13 @@ const Args = struct {
     help: bool = false,
     long: bool = false,
     column: bool = false,
-    hidden: bool = false,
+    all: bool = false,
 
     pub const short = .{
         .h = "help",
         .l = "long",
         .c = "column",
-        .a = "hidden",
+        .a = "all",
     };
 };
 
@@ -40,7 +40,7 @@ pub fn main(init: std.process.Init) !void {
             return;
         };
 
-        var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .hidden = res.flags.hidden });
+        var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .all = res.flags.all });
 
         filestat.printlist() catch |err| {
             try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
@@ -54,7 +54,7 @@ pub fn main(init: std.process.Init) !void {
                 return;
             };
 
-            var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .hidden = res.flags.hidden });
+            var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .all = res.flags.all });
 
             filestat.printlist() catch |err| {
                 try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
