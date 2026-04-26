@@ -153,12 +153,32 @@ pub fn printlist(self: *Self) !void {
                     .SUCCESS => {},
                     else => return error.Ioctl,
                 }
-                var max_width: usize = 0;
-                for (list.items) |i| {
-                    if (i.name.len > max_width) max_width = i.name.len;
+                const term_width: usize = w.col;
+
+                const max_possible_cols = @min(list.items.len, term_width);
+                var num_cols: usize = 1;
+
+                for (2..max_possible_cols + 1) |try_cols| {
+                    const try_rows = (list.items.len + try_cols - 1) / try_cols;
+
+                    var total_width: usize = 0;
+                    for (0..try_cols) |col| {
+                        var col_max: usize = 0;
+                        for (0..try_rows) |row| {
+                            const idx = col * try_rows + row;
+                            if (idx >= list.items.len) break;
+                            if (list.items[idx].name.len > col_max) col_max = list.items[idx].name.len;
+                        }
+
+                        total_width += col_max + (if (col < try_cols - 1) @as(usize, 2) else 0);
+                    }
+
+                    if (total_width <= term_width) {
+                        num_cols = try_cols;
+                    } else {
+                        break;
+                    }
                 }
-                const col_width = max_width + 2;
-                const num_cols = @max(1, w.col / col_width);
                 const num_rows = (list.items.len + num_cols - 1) / num_cols;
 
                 var col_widths = try self.allocator.alloc(usize, num_cols);
