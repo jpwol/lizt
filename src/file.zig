@@ -423,14 +423,14 @@ fn getSizeString(self: *Self, size: u64) ![]const u8 {
     const suffixes = [_][]const u8{ "B", "K", "M", "G", "T", "P" };
     var value: f64 = @floatFromInt(size);
     var i: usize = 0;
-    while (value >= 1024 and i < suffixes.len ) : (i += 1) {
+    while (value >= 1024 and i < suffixes.len) : (i += 1) {
         value /= 1024;
     }
     var buf: [256]u8 = undefined;
     if (i == 0) {
-        return self.allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}{s}", .{size, suffixes[i]}));
+        return self.allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}{s}", .{ size, suffixes[i] }));
     } else {
-        return self.allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}{s}", .{std.math.ceil(value), suffixes[i]}));
+        return self.allocator.dupe(u8, try std.fmt.bufPrint(&buf, "{d}{s}", .{ std.math.ceil(value), suffixes[i] }));
     }
 }
 
