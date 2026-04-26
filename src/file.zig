@@ -119,7 +119,7 @@ pub fn printlist(self: *Self) !void {
             }
 
             for (list.items) |i| {
-                try self.term.writer.print("\x1b[36m│ {[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[36m│ \x1b[34m{[size]s:>[width]} \x1b[36m│ ", .{
+                try self.term.writer.print("\x1b[36m {[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[36m│ \x1b[34m{[size]s:>[width]} \x1b[36m│ ", .{
                     .perm = i.perm,
                     .user = i.uname,
                     .uwidth = max_user_width,
@@ -153,7 +153,13 @@ pub fn printlist(self: *Self) !void {
                     .SUCCESS => {},
                     else => return error.Ioctl,
                 }
-                const term_width: usize = w.col;
+                const term_width: usize = if (w.col == 0) {
+                    for (list.items) |item| {
+                        try ftype.setTermColor(item.kind, self.term, item.exec);
+                        try self.term.writer.print("{s}\x1b[0m\n", .{item.name});
+                    }
+                    return;
+                } else w.col;
 
                 const max_possible_cols = @min(list.items.len, term_width);
                 var num_cols: usize = 1;
@@ -175,8 +181,6 @@ pub fn printlist(self: *Self) !void {
 
                     if (total_width <= term_width) {
                         num_cols = try_cols;
-                    } else {
-                        break;
                     }
                 }
                 const num_rows = (list.items.len + num_cols - 1) / num_cols;
@@ -186,7 +190,7 @@ pub fn printlist(self: *Self) !void {
                 @memset(col_widths, 0);
                 for (list.items, 0..) |item, idx| {
                     const col = idx / num_rows;
-                    if (item.name.len > col_widths[col]) col_widths[col] = item.name.len;
+                    if (item.name.len > col_widths[col]) col_widths[col] = item.name.len + 2;
                 }
 
                 for (0..num_rows) |row| {
@@ -194,7 +198,8 @@ pub fn printlist(self: *Self) !void {
                         const idx = col * num_rows + row;
                         if (idx >= list.items.len) break;
                         const item = list.items[idx];
-                        const is_last = (col == num_cols - 1) or (idx + num_rows >= list.items.len);
+                        const next_idx = (col + 1) * num_rows + row;
+                        const is_last = (col == num_cols - 1) or (next_idx >= list.items.len);
 
                         try ftype.setTermColor(item.kind, self.term, item.exec);
                         if (is_last) {
@@ -202,7 +207,7 @@ pub fn printlist(self: *Self) !void {
                         } else {
                             try self.term.writer.print("{[name]s:<[width]}\x1b[0m", .{
                                 .name = item.name,
-                                .width = col_widths[col] + 3,
+                                .width = col_widths[col],
                             });
                         }
                     }
