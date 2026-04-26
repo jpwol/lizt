@@ -202,7 +202,7 @@ pub fn printlist(self: *Self) !void {
                         } else {
                             try self.term.writer.print("{[name]s:<[width]}\x1b[0m", .{
                                 .name = item.name,
-                                .width = col_widths[col] + 2,
+                                .width = col_widths[col] + 3,
                             });
                         }
                     }
