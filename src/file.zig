@@ -394,6 +394,19 @@ fn handleDirShort(self: *Self) !std.ArrayList(FileStatShort) {
         }
     }
 
+    if (self.opt.hidden) {
+        try list.insert(self.allocator, 0, .{
+            .name = ".",
+            .kind = .directory,
+            .exec = false,
+        });
+        try list.insert(self.allocator, 0, .{
+            .name = "..",
+            .kind = .directory,
+            .exec = false,
+        });
+    }
+
     return list;
 }
 
@@ -432,7 +445,40 @@ fn handleDirLong(self: *Self) !std.ArrayList(FileStatLong) {
                         break :blk null;
                     }
                 },
-                });
+            });
+        }
+    }
+
+    if (self.opt.hidden) {
+        const this_dir_stat = getstatx(d.handle, ".");
+        const prev_dir_stat = getstatx(d.handle, "..");
+        if (this_dir_stat) |dir| {
+            try list.insert(self.allocator, 0, .{
+                .name = try self.allocator.dupe(u8, "."),
+                .uname = self.getUserName(dir.uid),
+                .gname = self.getGroupName(dir.gid),
+                .kind = .directory,
+                .exec = false,
+                .link = null,
+                .mode = dir.mode,
+                .nlink = dir.nlink,
+                .perm = buildPermString(.directory, dir.mode),
+                .size = try self.getSizeString(dir.size),
+            });
+        }
+        if (prev_dir_stat) |dir| {
+            try list.insert(self.allocator, 0, .{
+                .name = try self.allocator.dupe(u8, ".."),
+                .uname = self.getUserName(dir.uid),
+                .gname = self.getGroupName(dir.gid),
+                .kind = .directory,
+                .exec = false,
+                .link = null,
+                .mode = dir.mode,
+                .nlink = dir.nlink,
+                .perm = buildPermString(.directory, dir.mode),
+                .size = try self.getSizeString(dir.size),
+            });
         }
     }
 
