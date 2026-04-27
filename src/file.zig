@@ -132,17 +132,17 @@ pub fn printlist(self: *Self) !void {
                 try self.term.writer.print("{[icon]s} {[name]s} \x1b[0;90m{[link]s}\x1b[0m\n", .{
                     .icon = blk: {
                         if (i.kind == .directory) {
-                            break :blk "";
+                            break :blk " ";
                         } else if (i.kind == .sym_link) {
-                            break :blk "";
+                            break :blk " ";
                         } else if (i.exec) {
-                            break :blk "";
+                            break :blk " ";
                         } else {
                             const ext = std.fs.path.extension(i.name);
                             if (ftype.icons.get(ext)) |icon| {
                                 break :blk icon;
                             }
-                            break :blk "";
+                            break :blk " ";
                         }
                     },
                     .name = i.name,
