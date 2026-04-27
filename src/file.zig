@@ -129,7 +129,22 @@ pub fn printlist(self: *Self) !void {
                     .width = max_size_width,
                 });
                 try ftype.setTermColor(i.kind, self.term, i.exec);
-                try self.term.writer.print("{[name]s} \x1b[0;90m{[link]s}\x1b[0m\n", .{
+                try self.term.writer.print("{[icon]s} {[name]s} \x1b[0;90m{[link]s}\x1b[0m\n", .{
+                    .icon = blk: {
+                        if (i.kind == .directory) {
+                            break :blk "";
+                        } else if (i.kind == .sym_link) {
+                            break :blk "";
+                        } else if (i.exec) {
+                            break :blk "";
+                        } else {
+                            const ext = std.fs.path.extension(i.name);
+                            if (ftype.icons.get(ext)) |icon| {
+                                break :blk icon;
+                            }
+                            break :blk "";
+                        }
+                    },
                     .name = i.name,
                     .link = i.link orelse "",
                 });
