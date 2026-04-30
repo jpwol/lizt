@@ -103,6 +103,9 @@ pub fn printlist(self: *Self) !void {
     if (self.kind == .directory) {
         if (self.opt.long) {
             var list = try self.handleDirLong();
+
+            if (list.items.len == 0) return
+
             std.mem.sort(FileStatLong, list.items, {}, lessThanLong);
             var max_size_width: usize = 0;
             var max_user_width: usize = 0;
@@ -153,6 +156,9 @@ pub fn printlist(self: *Self) !void {
             self.deinit(&list);
         } else {
             const list = try self.handleDirShort();
+
+            if (list.items.len == 0) return;
+
             std.mem.sort(FileStatShort, list.items, {}, lessThanShort);
             if (self.opt.column) {
                 for (list.items) |i| {
