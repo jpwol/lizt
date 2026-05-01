@@ -22,10 +22,9 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const res = try zopt.parse(Args, allocator, init.minimal.args);
 
-    const stdout = blk: {
+    var stdout = blk: {
         var buf: [4096]u8 = undefined;
-        var stdout = std.Io.File.stdout().writer(init.io, &buf);
-        break :blk &stdout.interface;
+        break :blk std.Io.File.stdout().writer(init.io, &buf);
     };
     const stderr = blk: {
         var stderr = std.Io.File.stderr().writer(init.io, &.{});
@@ -40,7 +39,7 @@ pub fn main(init: std.process.Init) !void {
             return;
         };
 
-        var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .all = res.flags.all });
+        var filestat = try file.init(path, s.kind, init.io, &stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .all = res.flags.all });
 
         filestat.printlist() catch |err| {
             try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
@@ -48,13 +47,13 @@ pub fn main(init: std.process.Init) !void {
         };
     } else {
         for (res.argv[1..], 1..) |path, idx| {
-            try stdout.print("{s}:\n", .{path});
+            try stdout.interface.print("{s}:\n", .{path});
             const s = cwd.statFile(init.io, path, .{ .follow_symlinks = false }) catch |err| {
                 try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
                 return;
             };
 
-            var filestat = try file.init(path, s.kind, init.io, stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .all = res.flags.all });
+            var filestat = try file.init(path, s.kind, init.io, &stdout, allocator, .{ .long = res.flags.long, .column = res.flags.column, .all = res.flags.all });
 
             filestat.printlist() catch |err| {
                 try stderr.print("{s}: '{s}': {s}\n", .{res.argv[0], path, @errorName(err)});
@@ -62,7 +61,7 @@ pub fn main(init: std.process.Init) !void {
             };
 
             if (idx < res.argv.len - 1)
-                try stdout.writeByte('\n');
+                try stdout.interface.writeByte('\n');
         }
     }
 

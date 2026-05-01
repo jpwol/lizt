@@ -61,8 +61,9 @@ io: Io,
 allocator: Allocator,
 term: Terminal,
 opt: opts.Opts,
+tty: bool,
 
-pub fn init(path: []const u8, kind: File.Kind, io: Io, writer: *Io.Writer, allocator: Allocator, opt: opts.Opts) !Self {
+pub fn init(path: []const u8, kind: File.Kind, io: Io, stdout: *Io.File.Writer, allocator: Allocator, opt: opts.Opts) !Self {
     if (opt.long and opt.column) return error.LongAndColumn;
 
     if (opt.long) {
@@ -73,8 +74,9 @@ pub fn init(path: []const u8, kind: File.Kind, io: Io, writer: *Io.Writer, alloc
             .allocator = allocator,
             .uname_cache = .init(allocator),
             .grname_cache = .init(allocator),
-            .term = .{ .mode = try .detect(io, File.stdout(), false, true), .writer = writer },
+            .term = .{ .mode = try .detect(io, File.stdout(), false, true), .writer = &stdout.interface },
             .opt = opt,
+            .tty = try stdout.*.file.isTty(io),
         };
     } else {
         return .{
@@ -85,7 +87,8 @@ pub fn init(path: []const u8, kind: File.Kind, io: Io, writer: *Io.Writer, alloc
             .uname_cache = undefined,
             .grname_cache = undefined,
             .opt = opt,
-            .term = .{ .mode = try .detect(io, File.stdout(), false, true), .writer = writer },
+            .term = .{ .mode = try .detect(io, File.stdout(), false, true), .writer = &stdout.interface },
+            .tty = try stdout.*.file.isTty(io),
         };
     }
 }
@@ -122,7 +125,7 @@ pub fn printlist(self: *Self) !void {
             }
 
             for (list.items) |i| {
-                try self.term.writer.print("\x1b[36m {[perm]s} │ \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[36m│ \x1b[34m{[size]s:>[width]} \x1b[36m│ ", .{
+                try self.term.writer.print("{[cyan]s} {[perm]s} │ {[green]s}{[user]s: <[uwidth]} {[group]s: <[gwidth]} {[cyan]s}│ {[blue]s}{[size]s:>[width]} {[cyan]s}│ ", .{
                     .perm = i.perm,
                     .user = i.uname,
                     .uwidth = max_user_width,
@@ -130,26 +133,33 @@ pub fn printlist(self: *Self) !void {
                     .gwidth = max_group_width,
                     .size = i.size,
                     .width = max_size_width,
+                    .cyan = cyan(self.tty),
+                    .green = green(self.tty),
+                    .blue = blue(self.tty),
                 });
-                try ftype.setTermColor(i.kind, self.term, i.exec);
-                try self.term.writer.print("{[icon]s} {[name]s} \x1b[0;90m{[link]s}\x1b[0m\n", .{
+                try ftype.setTermColor(i.kind, self.term, i.exec, self.tty);
+                try self.term.writer.print("{[icon]s}{[name]s} {[dim]s}{[link]s}{[reset]s}\n", .{
                     .icon = blk: {
+                        if (!self.tty) break :blk "";
+
                         if (i.kind == .directory) {
-                            break :blk " ";
+                            break :blk "  ";
                         } else if (i.kind == .sym_link) {
-                            break :blk " ";
+                            break :blk "  ";
                         } else if (i.exec) {
-                            break :blk " ";
+                            break :blk "  ";
                         } else {
                             const ext = std.fs.path.extension(i.name);
                             if (ftype.icons.get(ext)) |icon| {
                                 break :blk icon;
                             }
-                            break :blk " ";
+                            break :blk "  ";
                         }
                     },
                     .name = i.name,
                     .link = i.link orelse "",
+                    .dim = dim(self.tty),
+                    .reset = reset(self.tty),
                 });
             }
 
@@ -162,9 +172,10 @@ pub fn printlist(self: *Self) !void {
             std.mem.sort(FileStatShort, list.items, {}, lessThanShort);
             if (self.opt.column) {
                 for (list.items) |i| {
-                    try ftype.setTermColor(i.kind, self.term, i.exec);
-                    try self.term.writer.print("{[name]s}\x1b[0m\n", .{
+                    try ftype.setTermColor(i.kind, self.term, i.exec, self.tty);
+                    try self.term.writer.print("{[name]s}{[reset]s}\n", .{
                         .name = i.name,
+                        .reset = reset(self.tty),
                     });
                 }
             } else {
@@ -176,8 +187,11 @@ pub fn printlist(self: *Self) !void {
                 }
                 const term_width: usize = if (w.col == 0) {
                     for (list.items) |item| {
-                        try ftype.setTermColor(item.kind, self.term, item.exec);
-                        try self.term.writer.print("{s}\x1b[0m\n", .{item.name});
+                        try ftype.setTermColor(item.kind, self.term, item.exec, self.tty);
+                        try self.term.writer.print("{[name]s}{[reset]s}\n", .{
+                            .name = item.name,
+                            .reset = reset(self.tty),
+                        });
                     }
                     return;
                 } else w.col;
@@ -222,13 +236,17 @@ pub fn printlist(self: *Self) !void {
                         const next_idx = (col + 1) * num_rows + row;
                         const is_last = (col == num_cols - 1) or (next_idx >= list.items.len);
 
-                        try ftype.setTermColor(item.kind, self.term, item.exec);
+                        try ftype.setTermColor(item.kind, self.term, item.exec, self.tty);
                         if (is_last) {
-                            try self.term.writer.print("{s}\x1b[0m\n", .{item.name});
+                            try self.term.writer.print("{[name]s}{[reset]s}\n", .{
+                                .name = item.name,
+                                .reset = reset(self.tty),
+                            });
                         } else {
-                            try self.term.writer.print("{[name]s:<[width]}\x1b[0m", .{
+                            try self.term.writer.print("{[name]s:<[width]}{[reset]s}", .{
                                 .name = item.name,
                                 .width = col_widths[col],
+                                .reset = reset(self.tty),
                             });
                         }
                     }
@@ -243,7 +261,7 @@ pub fn printlist(self: *Self) !void {
                 const uwidth = f.uname.len;
                 const gwidth = f.gname.len;
 
-                try self.term.writer.print("\x1b[36m{[perm]s} \x1b[32m{[user]s: <[uwidth]} {[group]s: <[gwidth]} \x1b[34m{[size]s:>[width]} ", .{
+                try self.term.writer.print(" {[cyan]s}{[perm]s} {[green]s}{[user]s: <[uwidth]} {[group]s: <[gwidth]} {[blue]s}{[size]s:>[width]} ", .{
                     .perm = f.perm,
                     .user = f.uname,
                     .uwidth = uwidth,
@@ -251,11 +269,15 @@ pub fn printlist(self: *Self) !void {
                     .gwidth = gwidth,
                     .size = f.size,
                     .width = width,
+                    .cyan = cyan(self.tty),
+                    .green = green(self.tty),
+                    .blue = blue(self.tty),
                 });
-                try ftype.setTermColor(f.kind, self.term, f.exec);
-                try self.term.writer.print("{[name]s:<5} \x1b[0;90m{[link]s}\n", .{
+                try ftype.setTermColor(f.kind, self.term, f.exec, self.tty);
+                try self.term.writer.print("{[name]s:<5} {[dim]s}{[link]s}\n", .{
                     .name = f.name,
                     .link = f.link orelse "",
+                    .dim = dim(self.tty),
                 });
                 self.allocator.free(f.name);
                 if (f.link) |link| self.allocator.free(link);
@@ -263,7 +285,7 @@ pub fn printlist(self: *Self) !void {
         } else {
             const file = try self.handleFileShort();
             if (file) |f| {
-                try ftype.setTermColor(f.kind, self.term, f.exec);
+                try ftype.setTermColor(f.kind, self.term, f.exec, self.tty);
                 try self.term.writer.print("{[name]s}\n", .{
                     .name = f.name,
                 });
@@ -536,3 +558,9 @@ pub fn deinit(self: *Self, list: *std.ArrayList(FileStatLong)) void {
 
     list.clearAndFree(self.allocator);
 }
+
+fn cyan(use_color: bool) []const u8   { return if (use_color) "\x1b[36m" else ""; }
+fn green(use_color: bool) []const u8  { return if (use_color) "\x1b[32m" else ""; }
+fn blue(use_color: bool) []const u8   { return if (use_color) "\x1b[34m" else ""; }
+fn reset(use_color: bool) []const u8  { return if (use_color) "\x1b[0m"  else ""; }
+fn dim(use_color: bool) []const u8    { return if (use_color) "\x1b[0;90m" else ""; }

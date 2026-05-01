@@ -5,7 +5,10 @@ const Terminal = Io.Terminal;
 const Color = Terminal.Color;
 const Kind = File.Kind;
 
-pub fn setTermColor(kind: Kind, term: Terminal, exec: bool) !void {
+pub fn setTermColor(kind: Kind, term: Terminal, exec: bool, use_color: bool) !void {
+    if (!use_color) {
+        return;
+    }
     switch (kind) {
         .directory => {
             try term.setColor(Color.blue);
@@ -54,7 +57,7 @@ pub const icons: std.StaticStringMap([]const u8) = .initComptime(.{
     .{ ".bmp", "󰋩 " },
     .{ ".webp", "󰋩 " },
     .{ ".gif", "󰋩 " },
-    .{ ".md", "󰍔 "},
+    .{ ".md", "󰍔 " },
 
     .{ "", " " },
 });
