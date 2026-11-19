@@ -10,7 +10,7 @@ const Args = struct {
     column: bool = false,
     all: bool = false,
 
-    pub const short = .{
+    pub const shorthands = .{
         .h = "help",
         .l = "long",
         .c = "column",
